@@ -5,12 +5,45 @@
 
 #include "fanuc_controllers/scaled_joint_trajectory_controller.hpp"
 
+#include <algorithm>
+
 #include "angles/angles.h"
 #include "fanuc_robot_driver/constants.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 
 namespace fanuc_controllers
 {
+namespace
+{
+hardware_interface::LoanedStateInterface* FindStateInterface(
+    std::vector<hardware_interface::LoanedStateInterface>& interfaces, const std::string& full_name)
+{
+  auto it = std::find_if(interfaces.begin(), interfaces.end(),
+                         [&full_name](const auto& interface) { return interface.get_name() == full_name; });
+  return it == interfaces.end() ? nullptr : &(*it);
+}
+
+double ReadStateValue(const hardware_interface::LoanedStateInterface& interface, const rclcpp::Logger& logger,
+                      const rclcpp::Clock::SharedPtr& clock, const double fallback = 0.0)
+{
+  if (const auto value = interface.get_optional<double>())
+  {
+    return *value;
+  }
+
+  RCLCPP_WARN_THROTTLE(logger, *clock, 5000, "Failed to read state interface '%s'", interface.get_name().c_str());
+  return fallback;
+}
+
+void WriteCommandValue(hardware_interface::LoanedCommandInterface& interface, const double value,
+                       const rclcpp::Logger& logger, const rclcpp::Clock::SharedPtr& clock)
+{
+  if (!interface.set_value(value))
+  {
+    RCLCPP_WARN_THROTTLE(logger, *clock, 5000, "Failed to write command interface '%s'", interface.get_name().c_str());
+  }
+}
+}  // namespace
 
 controller_interface::CallbackReturn ScaledJointTrajectoryController::on_init()
 {
@@ -33,6 +66,26 @@ controller_interface::InterfaceConfiguration ScaledJointTrajectoryController::st
 
 controller_interface::CallbackReturn ScaledJointTrajectoryController::on_activate(const rclcpp_lifecycle::State& state)
 {
+  scaling_state_interface_.reset();
+  connection_state_interface_.reset();
+
+  using fanuc_robot_driver::kConnectionStatusName;
+  using fanuc_robot_driver::kIsConnectedType;
+  using fanuc_robot_driver::kRobotStatusInterfaceName;
+  using fanuc_robot_driver::kStatusCollaborativeSpeedScalingType;
+
+  if (auto* scaling_interface = FindStateInterface(
+          state_interfaces_, std::string(kRobotStatusInterfaceName) + "/" + kStatusCollaborativeSpeedScalingType))
+  {
+    scaling_state_interface_ = *scaling_interface;
+  }
+
+  if (auto* connection_interface =
+          FindStateInterface(state_interfaces_, std::string(kConnectionStatusName) + "/" + kIsConnectedType))
+  {
+    connection_state_interface_ = *connection_interface;
+  }
+
   // Initialize slider subscriber for time scaling control
   time_scale_subscriber_ = get_node()->create_subscription<std_msgs::msg::Int32>(
       time_scale_topic_name_, 10,
@@ -46,19 +99,19 @@ controller_interface::CallbackReturn ScaledJointTrajectoryController::on_activat
 controller_interface::return_type ScaledJointTrajectoryController::update(const rclcpp::Time& time,
                                                                           const rclcpp::Duration& period)
 {
-  if (!state_interfaces_.empty() && state_interfaces_.back().get_value() == 0.0)
+  auto logger = this->get_node()->get_logger();
+  auto clock = this->get_node()->get_clock();
+
+  if (connection_state_interface_ && ReadStateValue(connection_state_interface_->get(), logger, clock) == 0.0)
   {
     last_is_connected_ = false;
     // The robot state indicated that the robot is no longer connected.
     return controller_interface::return_type::OK;
   }
-  if (!state_interfaces_.empty())
-  {
-    auto it = state_interfaces_.end();
-    --it;  // back
-    --it;  // back - 1
 
-    double tmp_scaling_factor = it->get_value();
+  if (scaling_state_interface_)
+  {
+    const double tmp_scaling_factor = ReadStateValue(scaling_state_interface_->get(), logger, clock, 1.0);
     if (std::isfinite(tmp_scaling_factor))
     {
       scaling_factor_ = tmp_scaling_factor;
@@ -78,12 +131,10 @@ controller_interface::return_type ScaledJointTrajectoryController::update(const 
   last_is_connected_ = true;
 
   folag_h_ = period.seconds();
-  if (get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
+  if (get_lifecycle_id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
   {
     return controller_interface::return_type::OK;
   }
-
-  auto logger = this->get_node()->get_logger();
 
   // update dynamic parameters
   if (param_listener_->is_old(params_))
@@ -137,7 +188,7 @@ controller_interface::return_type ScaledJointTrajectoryController::update(const 
   auto assign_interface_from_point = [&](auto& joint_interface, const std::vector<double>& trajectory_point_interface) {
     for (size_t index = 0; index < dof_; ++index)
     {
-      joint_interface[index].get().set_value(trajectory_point_interface[index]);
+      WriteCommandValue(joint_interface[index].get(), trajectory_point_interface[index], logger, clock);
     }
   };
 
@@ -155,7 +206,7 @@ controller_interface::return_type ScaledJointTrajectoryController::update(const 
     {
       first_sample = true;
       last_scaled_time_ = time;
-      if (params_.open_loop_control)
+      if (params_.interpolate_from_desired_state)
       {
         traj_external_point_ptr_->set_point_before_trajectory_msg(time, last_commanded_state_, joints_angle_wraparound_);
       }
@@ -276,7 +327,7 @@ controller_interface::return_type ScaledJointTrajectoryController::update(const 
           assign_interface_from_point(joint_command_interface_[3], tmp_command_);
         }
 
-        // store the previous command. Used in open-loop control mode
+        // Store the previous command so interpolation can continue from the desired state.
         last_commanded_state_ = state_desired_;
       }
 

@@ -17,6 +17,14 @@ This project will allow users to develop a ROS 2 application to control a FANUC 
 
 See the [FANUC ROS 2 Driver Documentation](https://fanuc-corporation.github.io/fanuc_driver_doc/) for instructions.
 
+This branch targets ROS 2 Jazzy on Ubuntu 24.04.
+
+If you are building from a fresh clone, initialize the bundled third-party sources before running `rosdep` or `colcon`:
+
+```bash
+git submodule update --init --recursive
+```
+
 ## Licensing
 
 The original FANUC ROS 2 Driver source code and associated documentation

@@ -7,7 +7,6 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     OpaqueFunction,
-    ExecuteProcess,
 )
 from launch.conditions import IfCondition
 from launch.substitutions import (
@@ -20,6 +19,23 @@ from launch.substitutions import (
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+
+def controller_spawner(controller_name, ros2_control_config):
+    return Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            controller_name,
+            "--controller-manager",
+            "/controller_manager",
+            "--controller-manager-timeout",
+            "180",
+            "--param-file",
+            ros2_control_config,
+        ],
+        output="screen",
+    )
 
 
 def launch_setup(context, *args, **kwargs):
@@ -64,12 +80,11 @@ def launch_setup(context, *args, **kwargs):
         "robot_description": ParameterValue(value=robot_description, value_type=str)
     }
 
-    ros_parameters = [robot_description, ros2_control_config]
     nodes_to_launch = []
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        parameters=ros_parameters,
+        parameters=[ros2_control_config],
         output="both",
     )
     nodes_to_launch.append(control_node)
@@ -102,41 +117,11 @@ def launch_setup(context, *args, **kwargs):
     nodes_to_launch.append(rviz_node)
 
     controller_spawner_processes = [
-        ExecuteProcess(
-            cmd=[
-                "ros2 run controller_manager spawner --controller-manager-timeout 180 joint_state_broadcaster"
-            ],
-            shell=True,
-            output="screen",
-        ),
-        ExecuteProcess(
-            cmd=[
-                "ros2 run controller_manager spawner --controller-manager-timeout 180 joint_trajectory_controller"
-            ],
-            shell=True,
-            output="screen",
-        ),
-        ExecuteProcess(
-            cmd=[
-                "ros2 run controller_manager spawner --controller-manager-timeout 180 fanuc_gpio_controller"
-            ],
-            shell=True,
-            output="screen",
-        ),
-        ExecuteProcess(
-            cmd=[
-                "ros2 run controller_manager spawner --controller-manager-timeout 180 fanuc_force_sensor_broadcaster"
-            ],
-            shell=True,
-            output="screen",
-        ),
-        ExecuteProcess(
-            cmd=[
-                "ros2 run controller_manager spawner --controller-manager-timeout 180 force_torque_sensor_broadcaster"
-            ],
-            shell=True,
-            output="screen",
-        ),
+        controller_spawner("joint_state_broadcaster", ros2_control_config),
+        controller_spawner("joint_trajectory_controller", ros2_control_config),
+        controller_spawner("fanuc_gpio_controller", ros2_control_config),
+        controller_spawner("fanuc_force_sensor_broadcaster", ros2_control_config),
+        controller_spawner("force_torque_sensor_broadcaster", ros2_control_config),
     ]
 
     return nodes_to_launch + controller_spawner_processes

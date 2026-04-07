@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "joint_trajectory_controller/joint_trajectory_controller.hpp"
@@ -46,6 +47,7 @@ private:
   double folag_tau_ = 0.2;  // time constant for first order lag in seconds
 
   std::optional<std::reference_wrapper<hardware_interface::LoanedStateInterface>> scaling_state_interface_;
+  std::optional<std::reference_wrapper<hardware_interface::LoanedStateInterface>> connection_state_interface_;
   std::atomic<double> scaling_factor_{ 1.0 };
 };
 

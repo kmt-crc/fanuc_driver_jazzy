@@ -25,11 +25,11 @@ permissions:
 jobs:
   industrial_ci:
     name: ROS ${{ matrix.ROS_DISTRO }} (${{ matrix.ROS_REPO }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false # should not cancel the others immediately
       matrix:
-        ROS_DISTRO: [humble]
+        ROS_DISTRO: [jazzy]
         ROS_REPO: [main]
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache" # directory for ccache (and how we enable ccache in industrial_ci)

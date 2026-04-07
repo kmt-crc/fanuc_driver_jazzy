@@ -13,6 +13,18 @@ constexpr auto kFRForceSensorBroadcaster = "FR_Force_Sensor_Broadcaster";
 
 namespace
 {
+double ReadInterfaceValue(const hardware_interface::LoanedStateInterface& interface, const rclcpp::Logger& logger,
+                          const rclcpp::Clock::SharedPtr& clock)
+{
+  if (const auto value = interface.get_optional<double>())
+  {
+    return *value;
+  }
+
+  RCLCPP_WARN_THROTTLE(logger, *clock, 5000, "Failed to read interface '%s'", interface.get_name().c_str());
+  return 0.0;
+}
+
 fanuc_client::FanucClient* getClientInstance()
 {
   return fanuc_client::FanucClient::get_instance();
@@ -105,16 +117,19 @@ controller_interface::CallbackReturn FanucForceSensorBroadcaster::on_activate(co
 controller_interface::return_type FanucForceSensorBroadcaster::update(const rclcpp::Time& time,
                                                                       const rclcpp::Duration& period)
 {
+  auto logger = get_node()->get_logger();
+  auto clock = get_node()->get_clock();
+
   // Publish all state interface data
   if (rt_force_sensor_publisher_->trylock())
   {
-    force_sensor_msg_.force_x = state_interfaces_[index_force_sensor_[0]].get_value();
-    force_sensor_msg_.force_y = state_interfaces_[index_force_sensor_[1]].get_value();
-    force_sensor_msg_.force_z = state_interfaces_[index_force_sensor_[2]].get_value();
-    force_sensor_msg_.moment_x = state_interfaces_[index_force_sensor_[3]].get_value();
-    force_sensor_msg_.moment_y = state_interfaces_[index_force_sensor_[4]].get_value();
-    force_sensor_msg_.moment_z = state_interfaces_[index_force_sensor_[5]].get_value();
-    force_sensor_msg_.fs_type = state_interfaces_[index_force_sensor_[6]].get_value();
+    force_sensor_msg_.force_x = ReadInterfaceValue(state_interfaces_[index_force_sensor_[0]], logger, clock);
+    force_sensor_msg_.force_y = ReadInterfaceValue(state_interfaces_[index_force_sensor_[1]], logger, clock);
+    force_sensor_msg_.force_z = ReadInterfaceValue(state_interfaces_[index_force_sensor_[2]], logger, clock);
+    force_sensor_msg_.moment_x = ReadInterfaceValue(state_interfaces_[index_force_sensor_[3]], logger, clock);
+    force_sensor_msg_.moment_y = ReadInterfaceValue(state_interfaces_[index_force_sensor_[4]], logger, clock);
+    force_sensor_msg_.moment_z = ReadInterfaceValue(state_interfaces_[index_force_sensor_[5]], logger, clock);
+    force_sensor_msg_.fs_type = ReadInterfaceValue(state_interfaces_[index_force_sensor_[6]], logger, clock);
 
     rt_force_sensor_publisher_->msg_ = force_sensor_msg_;
     rt_force_sensor_publisher_->unlockAndPublish();

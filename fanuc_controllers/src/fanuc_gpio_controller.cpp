@@ -6,6 +6,9 @@
 #include "fanuc_controllers/fanuc_gpio_controller.hpp"
 
 #include <algorithm>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "controller_interface/controller_interface_base.hpp"
@@ -23,6 +26,29 @@ template <typename T>
 void WriteMessageCallback(const T& msg, realtime_tools::RealtimeBuffer<T>& rt_buffer)
 {
   rt_buffer.writeFromNonRT(msg);
+}
+
+template <typename InterfaceT>
+double ReadInterfaceValue(const InterfaceT& interface, const rclcpp::Logger& logger,
+                          const rclcpp::Clock::SharedPtr& clock)
+{
+  if (const auto value = interface.get_optional<double>())
+  {
+    return *value;
+  }
+
+  RCLCPP_WARN_THROTTLE(logger, *clock, 5000, "Failed to read interface '%s'", interface.get_name().c_str());
+  return 0.0;
+}
+
+template <typename InterfaceT>
+void WriteInterfaceValue(InterfaceT& interface, const double value, const rclcpp::Logger& logger,
+                         const rclcpp::Clock::SharedPtr& clock)
+{
+  if (!interface.set_value(value))
+  {
+    RCLCPP_WARN_THROTTLE(logger, *clock, 5000, "Failed to write interface '%s'", interface.get_name().c_str());
+  }
 }
 
 std::shared_ptr<rmi::RMIConnectionInterface> getRMIInstance()
@@ -489,11 +515,21 @@ std::string ToString(const gpio_config::AnalogIOStateType& bool_io_state)
 
 std::filesystem::path GetFilePath(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node)
 {
+  std::string legacy_gpio_config_file;
+  if (node->get_parameter<std::string>("gpio_config_file", legacy_gpio_config_file) && !legacy_gpio_config_file.empty())
+  {
+    return legacy_gpio_config_file;
+  }
+
   // Check for the ROS parameter "gpio_config_file"
   std::string gpio_config_file_package;
   node->get_parameter<std::string>("gpio_config_file_package", gpio_config_file_package);
   std::string gpio_config_file_path;
   node->get_parameter<std::string>("gpio_config_file_path", gpio_config_file_path);
+  if (gpio_config_file_package.empty() || gpio_config_file_path.empty())
+  {
+    throw std::runtime_error("Either gpio_config_file or gpio_config_file_package/gpio_config_file_path must be set.");
+  }
   auto gpio_config_file =
       std::filesystem::path(ament_index_cpp::get_package_share_directory(gpio_config_file_package)) /
       gpio_config_file_path;
@@ -882,12 +918,16 @@ controller_interface::CallbackReturn FanucGPIOController::on_activate(const rclc
 
 controller_interface::return_type FanucGPIOController::update(const rclcpp::Time& time, const rclcpp::Duration& period)
 {
+  auto logger = get_node()->get_logger();
+  auto clock = get_node()->get_clock();
+
   // Publish all state interface data
   if (rt_analog_io_state_publisher_->trylock())
   {
     for (size_t i = 0; i < index_analog_io_state_.size(); ++i)
     {
-      analog_io_state_msg_.values[i].value = state_interfaces_[index_analog_io_state_[i]].get_value();
+      analog_io_state_msg_.values[i].value =
+          ReadInterfaceValue(state_interfaces_[index_analog_io_state_[i]], logger, clock);
     }
     rt_analog_io_state_publisher_->msg_ = analog_io_state_msg_;
     rt_analog_io_state_publisher_->unlockAndPublish();
@@ -895,7 +935,7 @@ controller_interface::return_type FanucGPIOController::update(const rclcpp::Time
 
   if (rt_connection_status_publisher_->trylock())
   {
-    connection_status_msg_.is_connected = state_interfaces_[index_connection_status_[0]].get_value();
+    connection_status_msg_.is_connected = ReadInterfaceValue(state_interfaces_[index_connection_status_[0]], logger, clock);
     rt_connection_status_publisher_->msg_ = connection_status_msg_;
     rt_connection_status_publisher_->unlockAndPublish();
   }
@@ -904,7 +944,7 @@ controller_interface::return_type FanucGPIOController::update(const rclcpp::Time
   {
     for (size_t i = 0; i < index_io_state_.size(); ++i)
     {
-      io_state_msg_.values[i].value = state_interfaces_[index_io_state_[i]].get_value();
+      io_state_msg_.values[i].value = ReadInterfaceValue(state_interfaces_[index_io_state_[i]], logger, clock);
     }
     rt_io_state_publisher_->msg_ = io_state_msg_;
     rt_io_state_publisher_->unlockAndPublish();
@@ -914,7 +954,8 @@ controller_interface::return_type FanucGPIOController::update(const rclcpp::Time
   {
     for (size_t i = 0; i < index_num_reg_state_.size(); ++i)
     {
-      num_reg_state_msg_.values[i].value = state_interfaces_[index_num_reg_state_[i]].get_value();
+      num_reg_state_msg_.values[i].value =
+          ReadInterfaceValue(state_interfaces_[index_num_reg_state_[i]], logger, clock);
     }
     rt_num_reg_state_publisher_->msg_ = num_reg_state_msg_;
     rt_num_reg_state_publisher_->unlockAndPublish();
@@ -922,11 +963,11 @@ controller_interface::return_type FanucGPIOController::update(const rclcpp::Time
 
   if (rt_robot_status_publisher_->trylock())
   {
-    robot_status_msg_.contact_stop_mode = state_interfaces_[index_robot_status_[0]].get_value();
-    robot_status_msg_.e_stopped = state_interfaces_[index_robot_status_[1]].get_value();
-    robot_status_msg_.in_error = state_interfaces_[index_robot_status_[2]].get_value();
-    robot_status_msg_.motion_possible = state_interfaces_[index_robot_status_[3]].get_value();
-    robot_status_msg_.tp_enabled = state_interfaces_[index_robot_status_[4]].get_value();
+    robot_status_msg_.contact_stop_mode = ReadInterfaceValue(state_interfaces_[index_robot_status_[0]], logger, clock);
+    robot_status_msg_.e_stopped = ReadInterfaceValue(state_interfaces_[index_robot_status_[1]], logger, clock);
+    robot_status_msg_.in_error = ReadInterfaceValue(state_interfaces_[index_robot_status_[2]], logger, clock);
+    robot_status_msg_.motion_possible = ReadInterfaceValue(state_interfaces_[index_robot_status_[3]], logger, clock);
+    robot_status_msg_.tp_enabled = ReadInterfaceValue(state_interfaces_[index_robot_status_[4]], logger, clock);
 
     rt_robot_status_publisher_->msg_ = robot_status_msg_;
     rt_robot_status_publisher_->unlockAndPublish();
@@ -935,7 +976,7 @@ controller_interface::return_type FanucGPIOController::update(const rclcpp::Time
   if (rt_collaborative_speed_scaling_publisher_->trylock())
   {
     collaborative_speed_scaling_msg_.collaborative_speed_scaling =
-        state_interfaces_[index_collaborative_speed_scaling_].get_value();
+        ReadInterfaceValue(state_interfaces_[index_collaborative_speed_scaling_], logger, clock);
     rt_collaborative_speed_scaling_publisher_->msg_ = collaborative_speed_scaling_msg_;
     rt_collaborative_speed_scaling_publisher_->unlockAndPublish();
   }
@@ -971,17 +1012,17 @@ controller_interface::return_type FanucGPIOController::update(const rclcpp::Time
 
   for (size_t i = 0; i < index_analog_io_cmd_.size(); ++i)
   {
-    command_interfaces_[index_analog_io_cmd_[i]].set_value(analog_io_cmd_msg_.values[i].value);
+    WriteInterfaceValue(command_interfaces_[index_analog_io_cmd_[i]], analog_io_cmd_msg_.values[i].value, logger, clock);
   }
 
   for (size_t i = 0; i < index_io_cmd_.size(); ++i)
   {
-    command_interfaces_[index_io_cmd_[i]].set_value(io_cmd_msg_.values[i].value);
+    WriteInterfaceValue(command_interfaces_[index_io_cmd_[i]], io_cmd_msg_.values[i].value, logger, clock);
   }
 
   for (size_t i = 0; i < index_num_reg_cmd_.size(); ++i)
   {
-    command_interfaces_[index_num_reg_cmd_[i]].set_value(num_reg_cmd_msg_.values[i].value);
+    WriteInterfaceValue(command_interfaces_[index_num_reg_cmd_[i]], num_reg_cmd_msg_.values[i].value, logger, clock);
   }
 
   return controller_interface::return_type::OK;

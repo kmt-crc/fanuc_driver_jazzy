@@ -43,9 +43,9 @@ public:
 
   hardware_interface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State& previous_state) override;
 
-  std::vector<hardware_interface::StateInterface> export_state_interfaces() final;
+  std::vector<hardware_interface::InterfaceDescription> export_unlisted_state_interface_descriptions() final;
 
-  std::vector<hardware_interface::CommandInterface> export_command_interfaces() final;
+  std::vector<hardware_interface::InterfaceDescription> export_unlisted_command_interface_descriptions() final;
 
   hardware_interface::return_type read(const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
