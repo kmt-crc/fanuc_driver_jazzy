@@ -32,7 +32,7 @@ template <typename InterfaceT>
 double ReadInterfaceValue(const InterfaceT& interface, const rclcpp::Logger& logger,
                           const rclcpp::Clock::SharedPtr& clock)
 {
-  if (const auto value = interface.get_optional<double>())
+  if (const auto value = interface.template get_optional<double>())
   {
     return *value;
   }
